@@ -2940,18 +2940,16 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
       int i;
 
       for (i=0; i<r->m_numCalls; i++) {
-    	  RTMP_Log(RTMP_LOGDEBUG, "method call %s ",r->m_numCalls[i].name.av_val);
-		if (r->m_methodCalls[i].num == (int)txn) {
-		    methodInvoked = r->m_methodCalls[i].name;
-	        RTMP_Log(RTMP_LOGDEBUG, "%s, received result id %f without matching request",
-		  AV_erase(r->m_methodCalls, &r->m_numCalls, i, FALSE);
-		  break;
-		}
+	if (r->m_methodCalls[i].num == (int)txn) {
+	  methodInvoked = r->m_methodCalls[i].name;
+	  AV_erase(r->m_methodCalls, &r->m_numCalls, i, FALSE);
+	  break;
+	}
       }
       if (!methodInvoked.av_val) {
-			RTMP_Log(RTMP_LOGDEBUG, "%s, received result id %f without matching request",
-		  __FUNCTION__, txn);
-        goto leave;
+        RTMP_Log(RTMP_LOGDEBUG, "%s, received result id %f without matching request",
+	  __FUNCTION__, txn);
+	goto leave;
       }
 
       RTMP_Log(RTMP_LOGDEBUG, "%s, received result for method call <%s>", __FUNCTION__,
@@ -2961,12 +2959,12 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
 	{
 	  if (r->Link.token.av_len)
 	    {
-			  AMFObjectProperty p;
-			  if (RTMP_FindFirstMatchingProperty(&obj, &av_secureToken, &p))
-				{
-				  DecodeTEA(&r->Link.token, &p.p_vu.p_aval);
-				  SendSecureTokenResponse(r, &p.p_vu.p_aval);
-				}
+	      AMFObjectProperty p;
+	      if (RTMP_FindFirstMatchingProperty(&obj, &av_secureToken, &p))
+		{
+		  DecodeTEA(&r->Link.token, &p.p_vu.p_aval);
+		  SendSecureTokenResponse(r, &p.p_vu.p_aval);
+		}
 	    }
 	  if (r->Link.protocol & RTMP_FEATURE_WRITE)
 	    {
@@ -3049,41 +3047,68 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
     }
   else if (AVMATCH(&method, &av__error))
     {
-        int handled = FALSE;
-#ifdef CRYPTO
+      int handled = FALSE;
       AVal methodInvoked = {0};
       int i;
+      AMFObject obj2;
 
-      if (r->Link.protocol & RTMP_FEATURE_WRITE)
-        {
+      AVal code, level, description;
+      AMFProp_GetObject(AMF_GetProp(&obj, NULL, 3), &obj2);
+      AMFProp_GetString(AMF_GetProp(&obj2, &av_code, -1), &code);
+      AMFProp_GetString(AMF_GetProp(&obj2, &av_level, -1), &level);
+      AMFProp_GetString(AMF_GetProp(&obj2, &av_description, -1), &description);
+      RTMP_Log(RTMP_LOGDEBUG, "%s, error description: %s", __FUNCTION__, description.av_val);
+
+      if(memcmp("302", code->av_val, 3) == 0){
+
+          unsigned int parsedPort;
+          AMFObjectProperty p;
+          AVal redirect;
+          SAVC(ex);
+          SAVC(redirect);
+          AMFProp_GetString(&p, &redirect);
+          r->Link.redirected = TRUE;
+          int len = redirect.av_len;
+          char *url = malloc(len + 1);
+          memcpy(url, redirect.av_val, redirect.av_len);
+          url[len] = '\0';
+          r->Link.tcUrl.av_val = url;
+          r->Link.tcUrl.av_len = redirect.av_len;
+          RTMP_ParseURL(url, &r->Link.protocol, &r->Link.hostname, &parsedPort, &r->Link.playpath0, &r->Link.app);
+          if (parsedPort)
+              r->Link.port = parsedPort;
+          if (r->Link.redirected) {
+              handled = TRUE;
+              RTMP_Log(RTMP_LOGINFO, "rtmp server sent redirect");
+          }
+
+          if (!handled){
+              RTMP_Log(RTMP_LOGERROR, "rtmp server sent error");
+          }
+      }else if (r->Link.protocol & RTMP_FEATURE_WRITE )
+      {
+#ifdef CRYPTO
           for (i=0; i<r->m_numCalls; i++)
-            {
+          {
               if (r->m_methodCalls[i].num == txn)
-                {
+              {
                   methodInvoked = r->m_methodCalls[i].name;
                   AV_erase(r->m_methodCalls, &r->m_numCalls, i, FALSE);
                   break;
-                }
-            }
+               }
+          }
           if (!methodInvoked.av_val)
-            {
+          {
               RTMP_Log(RTMP_LOGDEBUG, "%s, received result id %f without matching request",
                     __FUNCTION__, txn);
               goto leave;
-            }
+          }
 
           RTMP_Log(RTMP_LOGDEBUG, "%s, received error for method call <%s>", __FUNCTION__,
           methodInvoked.av_val);
 
           if (AVMATCH(&methodInvoked, &av_connect))
-            {
-              AMFObject obj2;
-              AVal code, level, description;
-              AMFProp_GetObject(AMF_GetProp(&obj, NULL, 3), &obj2);
-              AMFProp_GetString(AMF_GetProp(&obj2, &av_code, -1), &code);
-              AMFProp_GetString(AMF_GetProp(&obj2, &av_level, -1), &level);
-              AMFProp_GetString(AMF_GetProp(&obj2, &av_description, -1), &description);
-              RTMP_Log(RTMP_LOGDEBUG, "%s, error description: %s", __FUNCTION__, description.av_val);
+          {
               /* if PublisherAuth returns 1, then reconnect */
               if (PublisherAuth(r, &description) == 1)
               {
@@ -3091,57 +3116,18 @@ HandleInvoke(RTMP *r, const char *body, unsigned int nBodySize)
                 if (!RTMP_Connect(r, NULL) || !RTMP_ConnectStream(r, 0))
                   goto leave;
               }
-                handled = TRUE;
-            }
-        }
-      else
+              handled = TRUE;
+           }
+#endif
+       }
+       else
         {
           RTMP_Log(RTMP_LOGERROR, "rtmp server sent error");
         }
       free(methodInvoked.av_val);
-#endif
-
-        double code = 0;
-        unsigned int parsedPort;
-        AMFObject obj2;
-        AMFObjectProperty p;
-        AVal redirect;
-        SAVC(ex);
-        SAVC(redirect);
-
-        AMFProp_GetObject(AMF_GetProp(&obj, NULL, 3), &obj2);
-        if (RTMP_FindFirstMatchingProperty(&obj2, &av_ex, &p)) {
-            AMFProp_GetObject(&p, &obj2);
-            if (RTMP_FindFirstMatchingProperty(&obj2, &av_code, &p))
-                code = AMFProp_GetNumber(&p);
-            if ((int)code == 302 && RTMP_FindFirstMatchingProperty(&obj2, &av_redirect, &p)) {
-                AMFProp_GetString(&p, &redirect);
-                r->Link.redirected = TRUE;
-
-//                char *playpath = "//playpath";
-                int len = redirect.av_len/* + strlen(playpath)*/;
-                char *url = malloc(len + 1);
-                memcpy(url, redirect.av_val, redirect.av_len);
-//                memcpy(url + redirect.av_len, playpath, strlen(playpath));
-                url[len] = '\0';
-                r->Link.tcUrl.av_val = url;
-                r->Link.tcUrl.av_len = redirect.av_len;
-                RTMP_ParseURL(url, &r->Link.protocol, &r->Link.hostname, &parsedPort, &r->Link.playpath0, &r->Link.app);
-                if (parsedPort)
-                    r->Link.port = parsedPort;
-           }
-        }
-        if (r->Link.redirected) {
-            handled = TRUE;
-            RTMP_Log(RTMP_LOGINFO, "rtmp server sent redirect");
-        }
-
-        if (!handled)
-            RTMP_Log(RTMP_LOGERROR, "rtmp server sent error");
-    }
+   }
   else if (AVMATCH(&method, &av_close))
     {
-      RTMP_Log(RTMP_LOGERROR, "hello 1");
         if (r->Link.redirected) {
             r->Link.redirected = FALSE;
 
@@ -4626,8 +4612,8 @@ Read_1_Packet(RTMP *r, char *buf, unsigned int buflen)
       if (rtnGetNextMediaPacket == 2)
 	{
 	  RTMP_Log(RTMP_LOGDEBUG,
-	      "Got Play.Complete or Play.Stop from server. "
-	      "Assuming stream is complete");
+		  "Got Play.Complete or Play.Stop from server. "
+		  "Assuming stream is complete");
 	  ret = RTMP_READ_COMPLETE;
 	  break;
 	}
@@ -4714,15 +4700,15 @@ Read_1_Packet(RTMP *r, char *buf, unsigned int buflen)
 		      if (memcmp
 			  (r->m_read.initialFrame, packetBody,
 			   r->m_read.nInitialFrameSize) == 0)
-			{
-			  RTMP_Log(RTMP_LOGDEBUG, "Checked keyframe successfully!");
-			  r->m_read.flags |= RTMP_READ_GOTKF;
-			  /* ignore it! (what about audio data after it? it is
-			   * handled by ignoring all 0ms frames, see below)
-			   */
-			  ret = RTMP_READ_IGNORE;
-			  break;
-			}
+				{
+				  RTMP_Log(RTMP_LOGDEBUG, "Checked keyframe successfully!");
+				  r->m_read.flags |= RTMP_READ_GOTKF;
+				  /* ignore it! (what about audio data after it? it is
+				   * handled by ignoring all 0ms frames, see below)
+				   */
+				  ret = RTMP_READ_IGNORE;
+				  break;
+				}
 		    }
 
 		  /* hande FLV streams, even though the server resends the
